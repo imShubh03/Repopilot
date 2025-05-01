@@ -6,11 +6,12 @@
  * TL;DR - This is where all the tRPC server stuff is created and plugged in. The pieces you will
  * need to use are documented accordingly near the end.
  */
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
 
 import { db } from "@/server/db";
+import { auth } from "@clerk/nextjs/server";
 
 /**
  * 1. CONTEXT
@@ -75,9 +76,6 @@ export const createTRPCRouter = t.router;
 
 /**
  * Middleware for timing procedure execution and adding an artificial delay in development.
- *
- * You can remove this if you don't like it, but it can help catch unwanted waterfalls by simulating
- * network latency that would occur in production but not in local development.
  */
 const timingMiddleware = t.middleware(async ({ next, path }) => {
   const start = Date.now();
@@ -96,6 +94,29 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
   return result;
 });
 
+// Middleware to check if a user is authenticated before allowing access to a tRPC procedure
+const isAuthenticated = t.middleware(async ({ next, ctx }) => {
+  // Attempt to fetch the authenticated user using the auth function
+  const user = await auth();
+
+  // Check if no user is authenticated (i.e., user is null or undefined)
+  if (!user) {
+    // Throw a tRPC error with "UNAUTHORIZED" code if authentication fails
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "You must be logged in to perform this action",
+    });
+  }
+
+  // IMPORTANT: Make sure we preserve the existing context including db
+  return next({
+    ctx: {
+      ...ctx, // This preserves the db in the context
+      user,   // Add the authenticated user to the context
+    },
+  });
+});
+
 /**
  * Public (unauthenticated) procedure
  *
@@ -104,3 +125,4 @@ const timingMiddleware = t.middleware(async ({ next, path }) => {
  * are logged in.
  */
 export const publicProcedure = t.procedure.use(timingMiddleware);
+export const protectedProcedure = t.procedure.use(isAuthenticated).use(timingMiddleware);
